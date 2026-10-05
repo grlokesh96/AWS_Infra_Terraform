@@ -1,0 +1,25 @@
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+
+# Terraform variables containing sensitive values
+*.tfvars
+*.tfvars.json
+
+# Terraform plan
+*.tfplan
+tfplan
+
+# OIDC bootstrap generated files
+trust-policy.json
+
+# AWS credentials
+.aws/
+*.pem
+
+# OS files
+.DS_Store
+Thumbs.db
