@@ -3,4 +3,4 @@ instance_type = "t3.medium"
 
 ami_id = "YOUR_AMI_ID"
 
-key_name = "YOUR_KEYPAIR_NAME"
+key_name = "No"
