@@ -72,7 +72,7 @@ resource "aws_instance" "app_server" {
   associate_public_ip_address = true
 
   root_block_device {
-    volume_size = 20
+    volume_size = 25
     volume_type = "gp3"
     encrypted   = true
   }
