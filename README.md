@@ -1,2 +1,2 @@
 # AWS_Infra_Terraform
-AWS_Infra_Terraform
+Ec2
