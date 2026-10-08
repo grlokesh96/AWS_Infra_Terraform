@@ -217,6 +217,10 @@ jobs:
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform show -no-color tfplan > tfplan.txt
 
+      - name: Export Plan as JSON
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform show -json tfplan > tfplan.json
+
       - name: Upload Terraform Plan
         uses: actions/upload-artifact@v4
         with:
@@ -225,6 +229,7 @@ jobs:
           path: |
             ${{ env.TF_WORKING_DIR }}/tfplan
             ${{ env.TF_WORKING_DIR }}/tfplan.txt
+            ${{ env.TF_WORKING_DIR }}/tfplan.json
 
 
   infracost:
@@ -283,12 +288,44 @@ jobs:
           if-no-files-found: error
           path: ${{ env.TF_WORKING_DIR }}/infracost.json
 
+  # Open-source cost estimate from the same plan artifact. Unlike Infracost
+  # it needs no API key, so it runs on every trigger, and it comments the
+  # estimate on the pull request when there is one.
+  openinfraquote:
+    name: OpenInfraQuote
+    needs: terraform-plan
+
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download Terraform Plan
+        uses: actions/download-artifact@v4
+        with:
+          name: terraform-plan
+          path: ${{ env.TF_WORKING_DIR }}
+
+      - name: Run OpenInfraQuote
+        uses: terrateamio/openinfraquote-action@v1
+        env:
+          GH_REPO: ${{ github.repository }}
+        with:
+          plan-path: ${{ env.TF_WORKING_DIR }}/tfplan.json
+          comment-on-pr: true
+          region: ${{ env.AWS_REGION }}
 
   terraform-approval:
     name: Production Approval
     needs:
       - terraform-plan
       - infracost
+      - openinfraquote
 
     # Deployments only ever run from main, never from feature branches
     # or pull requests.
@@ -298,7 +335,9 @@ jobs:
       github.ref == 'refs/heads/main' &&
       needs.terraform-plan.result == 'success' &&
       (needs.infracost.result == 'success' ||
-        needs.infracost.result == 'skipped')
+        needs.infracost.result == 'skipped') &&
+      (needs.openinfraquote.result == 'success' ||
+        needs.openinfraquote.result == 'skipped')
 
     runs-on: ubuntu-latest
 

@@ -92,6 +92,7 @@ The Terraform root module used by the pipeline is `./ec2`.
 | `super-linter` | Terraform / YAML / JSON linting |
 | `terraform-plan` | Real `terraform plan`, uploaded as the `terraform-plan` artifact |
 | `infracost` | Cost estimate (only when `INFRACOST_API_KEY` is configured) |
+| `openinfraquote` | [OpenInfraQuote](https://github.com/terrateamio/openinfraquote) cost estimate from the same plan, posted as a PR comment |
 | `terraform-approval` | Manual gate via the `production` environment |
 | `terraform-apply` | Destroys the previous deployment, then applies the exact plan from `terraform-plan` |
 
@@ -107,6 +108,10 @@ Repository secrets:
 | `AWS_ACCESS_KEY_ID` | yes | `terraform-plan`, `terraform-apply` |
 | `AWS_SECRET_ACCESS_KEY` | yes | `terraform-plan`, `terraform-apply` |
 | `INFRACOST_API_KEY` | no | `infracost` (job is skipped when absent) |
+
+`openinfraquote` needs no secret: it runs the OpenInfraQuote binary against
+the plan artifact and the public price sheet, so the estimate works even when
+Infracost is skipped.
 
 An environment named `production` is referenced by the approval and apply jobs.
 Add required reviewers to that environment in
