@@ -10,273 +10,119 @@ on:
     branches:
       - main
 
-  workflow_dispatch:
-    inputs:
-
-      run_tflint:
-        description: "Run TFLint"
-        required: true
-        type: boolean
-        default: true
-
-      run_tfsec:
-        description: "Run tfsec"
-        required: true
-        type: boolean
-        default: true
-
-      run_gitleaks:
-        description: "Run Gitleaks"
-        required: true
-        type: boolean
-        default: true
-
-      run_terrascan:
-        description: "Run Terrascan"
-        required: true
-        type: boolean
-        default: true
-
-      run_super_linter:
-        description: "Run Super Linter"
-        required: true
-        type: boolean
-        default: true
-
-      run_terratest:
-        description: "Run Terratest"
-        required: true
-        type: boolean
-        default: true
-
-      run_infracost:
-        description: "Run Infracost"
-        required: true
-        type: boolean
-        default: true
-
-
-# ============================================================
-# GLOBAL ENVIRONMENT
-# ============================================================
-
 env:
-
   TF_VERSION: "1.9.8"
-
   TF_WORKING_DIR: "./terraform"
-
   TF_IN_AUTOMATION: true
-
   TF_INPUT: false
-
   AWS_REGION: "us-east-1"
-
-
-# ============================================================
-# JOB 1 - TERRAFORM INIT & VALIDATE
-# ============================================================
 
 jobs:
 
   terraform-init-validate:
-
     name: Terraform Init & Validate
-
     runs-on: ubuntu-latest
 
     permissions:
       contents: read
 
     steps:
-
-      # --------------------------------------------------------
-      # Checkout
-      # --------------------------------------------------------
-
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
-
-      # --------------------------------------------------------
-      # Terraform
-      # --------------------------------------------------------
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
-      # --------------------------------------------------------
-      # Terraform Version
-      # --------------------------------------------------------
-
-      - name: Terraform Version
-        run: terraform version
-
-      # --------------------------------------------------------
-      # Terraform Init (no backend needed for validation)
-      # --------------------------------------------------------
-
       - name: Terraform Init
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform init -backend=false
 
-      # --------------------------------------------------------
-      # Terraform Format
-      # --------------------------------------------------------
-
-      - name: Terraform Format Check
+      - name: Terraform Format
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform fmt -check -recursive
-
-      # --------------------------------------------------------
-      # Terraform Validate
-      # --------------------------------------------------------
 
       - name: Terraform Validate
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform validate
 
 
-  # ==========================================================
-  # JOB 2 - TFLINT
-  # ==========================================================
-
   tflint:
-
     name: TFLint
-
     needs: terraform-init-validate
-
-    if: |
-      github.event_name != 'workflow_dispatch' ||
-      inputs.run_tflint == true
-
     runs-on: ubuntu-latest
 
     steps:
-
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: ${{ env.TF_VERSION }}
 
       - name: Setup TFLint
         uses: terraform-linters/setup-tflint@v4
 
-      - name: Initialize TFLint
+      - name: TFLint Init
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: tflint --init
 
-      - name: Run TFLint
+      - name: TFLint Scan
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: tflint --recursive
 
 
-  # ==========================================================
-  # JOB 3 - TFSEC
-  # ==========================================================
-
   tfsec:
-
-    name: tfsec Security Scan
-
+    name: tfsec
     needs: terraform-init-validate
-
-    if: |
-      github.event_name != 'workflow_dispatch' ||
-      inputs.run_tfsec == true
-
     runs-on: ubuntu-latest
 
     steps:
-
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Run tfsec
+      - name: tfsec Scan
         uses: aquasecurity/tfsec-action@v1.0.3
         with:
           working_directory: ${{ env.TF_WORKING_DIR }}
 
 
-  # ==========================================================
-  # JOB 4 - GITLEAKS
-  # ==========================================================
-
   gitleaks:
-
-    name: Gitleaks Secret Scan
-
+    name: Gitleaks
     needs: terraform-init-validate
-
-    if: |
-      github.event_name != 'workflow_dispatch' ||
-      inputs.run_gitleaks == true
-
     runs-on: ubuntu-latest
 
     permissions:
       contents: read
 
     steps:
-
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Run Gitleaks
+      - name: Gitleaks Scan
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
 
-  # ==========================================================
-  # JOB 5 - TERRASCAN
-  # ==========================================================
-
   terrascan:
-
-    name: Terrascan Security Scan
-
+    name: Terrascan
     needs: terraform-init-validate
-
-    if: |
-      github.event_name != 'workflow_dispatch' ||
-      inputs.run_terrascan == true
-
     runs-on: ubuntu-latest
 
     steps:
-
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Run Terrascan
+      - name: Terrascan Scan
         uses: tenable/terrascan-action@main
         with:
           iac_type: terraform
           iac_dir: ${{ env.TF_WORKING_DIR }}
 
 
-  # ==========================================================
-  # JOB 6 - SUPER LINTER
-  # ==========================================================
-
   super-linter:
-
     name: Super Linter
-
     needs: terraform-init-validate
-
-    if: |
-      github.event_name != 'workflow_dispatch' ||
-      inputs.run_super_linter == true
-
     runs-on: ubuntu-latest
 
     permissions:
@@ -284,7 +130,6 @@ jobs:
       statuses: write
 
     steps:
-
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -298,28 +143,15 @@ jobs:
           VALIDATE_JSON: true
 
 
-  # ==========================================================
-  # JOB 7 - TERRATEST
-  # ==========================================================
-
   terratest:
-
     name: Terratest
-
     needs: terraform-init-validate
-
-    if: |
-      github.event_name != 'workflow_dispatch' ||
-      inputs.run_terratest == true
-
     runs-on: ubuntu-latest
 
     permissions:
       contents: read
-      id-token: write
 
     steps:
-
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -328,18 +160,14 @@ jobs:
         with:
           go-version: "1.23"
 
-      # --------------------------------------------------------
-      # AWS Authentication (Terratest deploys real resources)
-      # --------------------------------------------------------
-
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          role-session-name: github-terratest
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Download Go dependencies
+      - name: Install Dependencies
         working-directory: ${{ env.TF_WORKING_DIR }}/tests
         run: go mod download
 
@@ -348,12 +176,7 @@ jobs:
         run: go test -v -timeout 30m
 
 
-  # ==========================================================
-  # JOB 8 - TERRAFORM PLAN
-  # ==========================================================
-
   terraform-plan:
-
     name: Terraform Plan
 
     needs:
@@ -379,10 +202,8 @@ jobs:
 
     permissions:
       contents: read
-      id-token: write
 
     steps:
-
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -391,49 +212,24 @@ jobs:
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
-      # ------------------------------------------------------
-      # AWS Authentication (OIDC, no stored keys)
-      # ------------------------------------------------------
-
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          role-session-name: github-terraform-plan
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
-
-      # ------------------------------------------------------
-      # Terraform Init
-      # ------------------------------------------------------
 
       - name: Terraform Init
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform init
 
-      # ------------------------------------------------------
-      # Terraform Plan
-      # ------------------------------------------------------
-
       - name: Terraform Plan
         working-directory: ${{ env.TF_WORKING_DIR }}
-        run: |
-          terraform plan \
-            -out=tfplan
+        run: terraform plan -out=tfplan
 
-      # ------------------------------------------------------
-      # Human-readable Plan
-      # ------------------------------------------------------
-
-      - name: Generate Terraform Plan Report
+      - name: Generate Plan Report
         working-directory: ${{ env.TF_WORKING_DIR }}
-        run: |
-          terraform show \
-            -no-color \
-            tfplan > tfplan.txt
-
-      # ------------------------------------------------------
-      # Upload Plan
-      # ------------------------------------------------------
+        run: terraform show -no-color tfplan > tfplan.txt
 
       - name: Upload Terraform Plan
         uses: actions/upload-artifact@v4
@@ -444,23 +240,9 @@ jobs:
             ${{ env.TF_WORKING_DIR }}/tfplan.txt
 
 
-  # ==========================================================
-  # JOB 9 - INFRACOST
-  # ==========================================================
-
   infracost:
-
     name: Infracost
-
     needs: terraform-plan
-
-    if: |
-      needs.terraform-plan.result == 'success' &&
-      (
-        github.event_name != 'workflow_dispatch' ||
-        inputs.run_infracost == true
-      )
-
     runs-on: ubuntu-latest
 
     permissions:
@@ -468,7 +250,6 @@ jobs:
       pull-requests: write
 
     steps:
-
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -481,16 +262,8 @@ jobs:
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform init -backend=false
 
-      # ------------------------------------------------------
-      # Install Infracost
-      # ------------------------------------------------------
-
       - name: Setup Infracost
         uses: infracost/actions/setup@v3
-
-      # ------------------------------------------------------
-      # Infracost Breakdown
-      # ------------------------------------------------------
 
       - name: Generate Cost Estimate
         working-directory: ${{ env.TF_WORKING_DIR }}
@@ -502,20 +275,12 @@ jobs:
         env:
           INFRACOST_API_KEY: ${{ secrets.INFRACOST_API_KEY }}
 
-      # ------------------------------------------------------
-      # Human-readable cost
-      # ------------------------------------------------------
-
-      - name: Display Cost Estimate
+      - name: Display Cost
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: |
           infracost output \
             --path infracost.json \
             --format table
-
-      # ------------------------------------------------------
-      # Upload Infracost Report
-      # ------------------------------------------------------
 
       - name: Upload Infracost Report
         uses: actions/upload-artifact@v4
@@ -524,14 +289,8 @@ jobs:
           path: ${{ env.TF_WORKING_DIR }}/infracost.json
 
 
-  # ==========================================================
-  # JOB 10 - MANUAL APPROVAL
-  # ==========================================================
-
   terraform-approval:
-
     name: Production Approval
-
     needs:
       - terraform-plan
       - infracost
@@ -539,10 +298,7 @@ jobs:
     if: |
       always() &&
       needs.terraform-plan.result == 'success' &&
-      (
-        needs.infracost.result == 'success' ||
-        needs.infracost.result == 'skipped'
-      )
+      (needs.infracost.result == 'success' || needs.infracost.result == 'skipped')
 
     runs-on: ubuntu-latest
 
@@ -550,21 +306,12 @@ jobs:
       name: production
 
     steps:
+      - name: Approval
+        run: echo "Production approval granted."
 
-      - name: Production Approval
-        run: |
-          echo "Production environment approval granted."
-          echo "Terraform Apply can proceed."
-
-
-  # ==========================================================
-  # JOB 11 - TERRAFORM APPLY
-  # ==========================================================
 
   terraform-apply:
-
     name: Terraform Apply
-
     needs: terraform-approval
 
     if: needs.terraform-approval.result == 'success'
@@ -573,43 +320,25 @@ jobs:
 
     permissions:
       contents: read
-      id-token: write
 
     environment:
       name: production
 
     steps:
-
-      # ------------------------------------------------------
-      # Checkout
-      # ------------------------------------------------------
-
       - name: Checkout
         uses: actions/checkout@v4
-
-      # ------------------------------------------------------
-      # Terraform
-      # ------------------------------------------------------
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
-      # ------------------------------------------------------
-      # AWS Authentication (OIDC, no stored keys)
-      # ------------------------------------------------------
-
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          role-session-name: github-terraform-apply
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
-
-      # ------------------------------------------------------
-      # Download Terraform Plan
-      # ------------------------------------------------------
 
       - name: Download Terraform Plan
         uses: actions/download-artifact@v4
@@ -617,21 +346,10 @@ jobs:
           name: terraform-plan
           path: ${{ env.TF_WORKING_DIR }}
 
-      # ------------------------------------------------------
-      # Terraform Init
-      # ------------------------------------------------------
-
       - name: Terraform Init
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform init
 
-      # ------------------------------------------------------
-      # Terraform Apply
-      # ------------------------------------------------------
-
       - name: Terraform Apply
         working-directory: ${{ env.TF_WORKING_DIR }}
-        run: |
-          terraform apply \
-            -auto-approve \
-            tfplan
+        run: terraform apply -auto-approve tfplan
