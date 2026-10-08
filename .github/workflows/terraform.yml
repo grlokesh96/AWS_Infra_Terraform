@@ -317,7 +317,12 @@ jobs:
     name: Terraform Apply
     needs: terraform-approval
 
-    if: needs.terraform-approval.result == 'success'
+    # always() is required here: without a status function GitHub ANDs an
+    # implicit success() over the whole transitive needs graph, and a
+    # skipped upstream job (e.g. Infracost) would skip this job too.
+    if: |
+      always() &&
+      needs.terraform-approval.result == 'success'
 
     runs-on: ubuntu-latest
 
