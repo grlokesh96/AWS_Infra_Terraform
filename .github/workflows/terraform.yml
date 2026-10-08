@@ -358,6 +358,45 @@ jobs:
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform init -input=false
 
+      # Terraform state is local to the runner, so a run that failed after
+      # creating the security group would make every later apply fail with
+      # InvalidGroup.Duplicate. Delete that leftover only while nothing is
+      # attached to it; if something is attached, a previous deployment is
+      # still alive and creating a second one would duplicate it.
+      - name: Clean up after a previous partial apply
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: |
+          # Keep this name in sync with aws_security_group.ec2_sg in main.tf.
+          sg_id=$(aws ec2 describe-security-groups \
+            --region "$AWS_REGION" \
+            --filters "Name=group-name,Values=terraform-ec2-sg" \
+            --query 'SecurityGroups[0].GroupId' \
+            --output text)
+
+          if [ -z "$sg_id" ] || [ "$sg_id" = "None" ]; then
+            echo "No leftover security group found."
+            exit 0
+          fi
+
+          attachments=$(aws ec2 describe-network-interfaces \
+            --region "$AWS_REGION" \
+            --filters "Name=group-id,Values=$sg_id" \
+            --query 'length(NetworkInterfaces)' \
+            --output text)
+
+          if [ "$attachments" != "0" ]; then
+            echo "::error::Security group $sg_id has $attachments network" \
+              "interface(s) attached: a deployment from an earlier run is" \
+              "still alive. State is not persisted, so import or destroy it" \
+              "before pushing again."
+            exit 1
+          fi
+
+          echo "Deleting unattached security group $sg_id left by a failed run."
+          aws ec2 delete-security-group \
+            --region "$AWS_REGION" \
+            --group-id "$sg_id"
+
       - name: Terraform Apply
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform apply -input=false -auto-approve tfplan

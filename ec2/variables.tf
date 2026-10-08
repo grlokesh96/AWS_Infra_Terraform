@@ -16,8 +16,9 @@ variable "ami_id" {
 }
 
 variable "key_name" {
-  description = "Existing EC2 key pair name"
+  description = "Existing EC2 key pair name. Leave unset to launch without one; only needed once allowed_ssh_cidrs is opened up."
   type        = string
+  default     = null
 }
 
 variable "allowed_ssh_cidrs" {

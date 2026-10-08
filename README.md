@@ -49,18 +49,30 @@ terraform apply
 | `aws_region` | `string` | `us-east-1` | AWS region to deploy into |
 | `instance_type` | `string` | `t3.medium` | EC2 instance type |
 | `ami_id` | `string` | – | AMI ID for the target region (required) |
-| `key_name` | `string` | – | Existing EC2 key pair name (required) |
+| `key_name` | `string` | `null` | Existing EC2 key pair name (optional) |
 | `allowed_ssh_cidrs` | `list(string)` | `[]` | CIDRs allowed on port 22. Empty = SSH closed |
 | `allowed_web_cidrs` | `list(string)` | `["0.0.0.0/0"]` | CIDRs allowed on ports 80/443 |
 
 ### Enabling SSH
 
-SSH is closed by default. To allow your own IP:
+SSH is closed by default. To allow your own IP, open the port and point the
+instance at a key pair that already exists in the region:
+
+```bash
+aws ec2 create-key-pair --key-name my-key-pair \
+  --query 'KeyMaterial' --output text > ~/.ssh/my-key-pair.pem
+chmod 600 ~/.ssh/my-key-pair.pem
+```
 
 ```hcl
 # ec2/terraform.tfvars
 allowed_ssh_cidrs = ["203.0.113.10/32"]
+key_name          = "my-key-pair"
 ```
+
+Leaving `key_name` unset launches the instance without a key pair. Setting it
+to a pair that does not exist in `aws_region` makes the apply fail with
+`InvalidKeyPair.NotFound`, which is why it is optional.
 
 Any `0.0.0.0/0` entry will be reported by tfsec, which is intentional.
 
