@@ -1,4 +1,3 @@
----
 name: Terraform CI/CD (AWS)
 
 on:
@@ -6,29 +5,32 @@ on:
     branches:
       - main
       - "feature/**"
-
   pull_request:
     branches:
       - main
 
-# Least privilege by default; jobs that need more declare it themselves.
+# Least privilege by default; jobs declare anything extra they need.
 permissions:
   contents: read
+
+# Never let two runs apply to production at the same time.
+concurrency:
+  group: terraform-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   TF_VERSION: "1.9.8"
   TF_WORKING_DIR: "./ec2"
   AWS_REGION: "us-east-1"
+  TERRASCAN_VERSION: "1.19.9"
 
 jobs:
 
   config-check:
     name: Config Check
     runs-on: ubuntu-latest
-
     outputs:
       infracost_enabled: ${{ steps.secrets.outputs.infracost_enabled }}
-
     steps:
       - name: Check optional secrets
         id: secrets
@@ -42,11 +44,9 @@ jobs:
             echo "::notice::INFRACOST_API_KEY not set, Infracost skipped"
           fi
 
-
   terraform-init-validate:
     name: Terraform Init & Validate
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -68,12 +68,10 @@ jobs:
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform validate
 
-
   tflint:
     name: TFLint
     needs: terraform-init-validate
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -89,12 +87,10 @@ jobs:
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: tflint --recursive
 
-
   tfsec:
     name: tfsec
     needs: terraform-init-validate
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -104,12 +100,10 @@ jobs:
         with:
           working_directory: ${{ env.TF_WORKING_DIR }}
 
-
   gitleaks:
     name: Gitleaks
     needs: terraform-init-validate
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -121,47 +115,35 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-
   terrascan:
     name: Terrascan
     needs: terraform-init-validate
     runs-on: ubuntu-latest
-
-    env:
-      TERRASCAN_VERSION: "1.19.9"
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # tenable/terrascan-action ships an outdated terrascan binary that
-      # no longer compiles the current policy bundle, so install a pinned
-      # release instead.
+      # tenable/terrascan-action ships an outdated binary that no longer
+      # compiles the current policy bundle, so install a pinned release.
       - name: Install Terrascan
         run: |
-          repo="tenable/terrascan/releases/download/v${TERRASCAN_VERSION}"
           pkg="terrascan_${TERRASCAN_VERSION}_Linux_x86_64.tar.gz"
           curl -sSfL -o "${RUNNER_TEMP}/ts.tgz" \
-            "https://github.com/${repo}/${pkg}"
-          tar -xzf "${RUNNER_TEMP}/ts.tgz" \
-            -C "${RUNNER_TEMP}" terrascan
-          sudo install -m 0755 "${RUNNER_TEMP}/terrascan" \
-            /usr/local/bin/terrascan
+            "https://github.com/tenable/terrascan/releases/download/v${TERRASCAN_VERSION}/${pkg}"
+          tar -xzf "${RUNNER_TEMP}/ts.tgz" -C "${RUNNER_TEMP}" terrascan
+          sudo install -m 0755 "${RUNNER_TEMP}/terrascan" /usr/local/bin/terrascan
           terrascan init
 
       - name: Terrascan Scan
         run: terrascan scan -i terraform -d "${TF_WORKING_DIR}"
 
-
   super-linter:
     name: Super Linter
     needs: terraform-init-validate
     runs-on: ubuntu-latest
-
     permissions:
       contents: read
       statuses: write
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -175,10 +157,8 @@ jobs:
           VALIDATE_YAML: true
           VALIDATE_JSON: true
 
-
   terraform-plan:
     name: Terraform Plan
-
     needs:
       - terraform-init-validate
       - tflint
@@ -186,9 +166,7 @@ jobs:
       - gitleaks
       - terrascan
       - super-linter
-
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -213,13 +191,11 @@ jobs:
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform plan -input=false -out=tfplan
 
-      - name: Generate Plan Report
+      - name: Export Plan Report and JSON
         working-directory: ${{ env.TF_WORKING_DIR }}
-        run: terraform show -no-color tfplan > tfplan.txt
-
-      - name: Export Plan as JSON
-        working-directory: ${{ env.TF_WORKING_DIR }}
-        run: terraform show -json tfplan > tfplan.json
+        run: |
+          terraform show -no-color tfplan > tfplan.txt
+          terraform show -json tfplan > tfplan.json
 
       - name: Upload Terraform Plan
         uses: actions/upload-artifact@v4
@@ -231,21 +207,16 @@ jobs:
             ${{ env.TF_WORKING_DIR }}/tfplan.txt
             ${{ env.TF_WORKING_DIR }}/tfplan.json
 
-
   infracost:
     name: Infracost
     needs:
       - terraform-plan
       - config-check
-
     if: needs.config-check.outputs.infracost_enabled == 'true'
-
     runs-on: ubuntu-latest
-
     permissions:
       contents: read
       pull-requests: write
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -266,20 +237,14 @@ jobs:
 
       - name: Generate Cost Estimate
         working-directory: ${{ env.TF_WORKING_DIR }}
-        run: |
-          infracost breakdown \
-            --path . \
-            --format json \
-            --out-file infracost.json
         env:
           INFRACOST_API_KEY: ${{ secrets.INFRACOST_API_KEY }}
+        run: |
+          infracost breakdown --path . --format json --out-file infracost.json
 
       - name: Display Cost
         working-directory: ${{ env.TF_WORKING_DIR }}
-        run: |
-          infracost output \
-            --path infracost.json \
-            --format table
+        run: infracost output --path infracost.json --format table
 
       - name: Upload Infracost Report
         uses: actions/upload-artifact@v4
@@ -288,19 +253,15 @@ jobs:
           if-no-files-found: error
           path: ${{ env.TF_WORKING_DIR }}/infracost.json
 
-  # Open-source cost estimate from the same plan artifact. Unlike Infracost
-  # it needs no API key, so it runs on every trigger, and it comments the
-  # estimate on the pull request when there is one.
+  # Open-source cost estimate from the plan artifact. Needs no API key,
+  # so it runs on every trigger and comments on the PR when there is one.
   openinfraquote:
     name: OpenInfraQuote
     needs: terraform-plan
-
     runs-on: ubuntu-latest
-
     permissions:
       contents: read
       pull-requests: write
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -311,14 +272,13 @@ jobs:
           name: terraform-plan
           path: ${{ env.TF_WORKING_DIR }}
 
-      - name: Run OpenInfraQuote
+      - name: OpenInfraQuote
         uses: terrateamio/openinfraquote-action@v1
-        env:
-          GH_REPO: ${{ github.repository }}
         with:
           plan-path: ${{ env.TF_WORKING_DIR }}/tfplan.json
           comment-on-pr: true
           region: ${{ env.AWS_REGION }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
   terraform-approval:
     name: Production Approval
@@ -326,51 +286,34 @@ jobs:
       - terraform-plan
       - infracost
       - openinfraquote
-
-    # Deployments only ever run from main, never from feature branches
-    # or pull requests.
+    # Deployments only ever run from main, never from feature branches or PRs.
     if: |
       always() &&
       github.event_name == 'push' &&
       github.ref == 'refs/heads/main' &&
       needs.terraform-plan.result == 'success' &&
-      (needs.infracost.result == 'success' ||
-        needs.infracost.result == 'skipped') &&
-      (needs.openinfraquote.result == 'success' ||
-        needs.openinfraquote.result == 'skipped')
-
+      (needs.infracost.result == 'success' || needs.infracost.result == 'skipped') &&
+      needs.openinfraquote.result == 'success'
     runs-on: ubuntu-latest
-
     permissions:
       contents: read
-
     environment:
       name: production
-
     steps:
       - name: Approval
         run: echo "Production approval granted."
 
-
   terraform-apply:
     name: Terraform Apply
     needs: terraform-approval
-
-    # always() is required here: without a status function GitHub ANDs an
-    # implicit success() over the whole transitive needs graph, and a
-    # skipped upstream job (e.g. Infracost) would skip this job too.
-    if: |
-      always() &&
-      needs.terraform-approval.result == 'success'
-
+    # always() stops GitHub from skipping this job when an optional
+    # upstream job (e.g. Infracost) was skipped.
+    if: always() && needs.terraform-approval.result == 'success'
     runs-on: ubuntu-latest
-
     permissions:
       contents: read
-
     environment:
       name: production
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -397,17 +340,17 @@ jobs:
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform init -input=false
 
-      # State is local to the runner, so every run plans a full "create"
-      # against an empty state file. Whatever the previous run left behind
-      # has to go first: otherwise apply fails on InvalidGroup.Duplicate,
-      # and a second EC2 box would be launched on top of the first one.
+      # State is local to the runner, so each run plans a full "create".
+      # Remove the previous deployment first, or apply fails on
+      # InvalidGroup.Duplicate and a second instance launches alongside the first.
+      # Keep this name in sync with aws_security_group.ec2_sg in main.tf.
       - name: Tear down the previous deployment
-        working-directory: ${{ env.TF_WORKING_DIR }}
+        env:
+          SG_NAME: terraform-ec2-sg
         run: |
-          # Keep this name in sync with aws_security_group.ec2_sg in main.tf.
           sg_id=$(aws ec2 describe-security-groups \
             --region "$AWS_REGION" \
-            --filters "Name=group-name,Values=terraform-ec2-sg" \
+            --filters "Name=group-name,Values=${SG_NAME}" \
             --query 'SecurityGroups[0].GroupId' \
             --output text)
 
@@ -416,53 +359,40 @@ jobs:
             exit 0
           fi
 
-          # Everything attached to that security group belongs to the
-          # deployment this workflow manages.
           instance_ids=$(aws ec2 describe-instances \
             --region "$AWS_REGION" \
-            --filters "Name=instance.group-name,Values=terraform-ec2-sg" \
-            "Name=instance-state-name,Values=pending,running,stopping,stopped" \
+            --filters "Name=instance.group-name,Values=${SG_NAME}" \
+              "Name=instance-state-name,Values=pending,running,stopping,stopped" \
             --query 'Reservations[].Instances[].InstanceId' \
             --output text)
 
           if [ -n "$instance_ids" ] && [ "$instance_ids" != "None" ]; then
             read -r -a ids <<< "$instance_ids"
             echo "Terminating previous instance(s): ${ids[*]}"
-            aws ec2 terminate-instances \
-              --region "$AWS_REGION" \
-              --instance-ids "${ids[@]}"
-            aws ec2 wait instance-terminated \
-              --region "$AWS_REGION" \
-              --instance-ids "${ids[@]}"
+            aws ec2 terminate-instances --region "$AWS_REGION" --instance-ids "${ids[@]}"
+            aws ec2 wait instance-terminated --region "$AWS_REGION" --instance-ids "${ids[@]}"
           fi
 
-          # The security group can only be deleted once its interfaces
-          # have been released.
+          # The security group can only be deleted once its interfaces are released.
+          attached=""
           for attempt in 1 2 3 4 5 6; do
             attached=$(aws ec2 describe-network-interfaces \
               --region "$AWS_REGION" \
               --filters "Name=group-id,Values=$sg_id" \
               --query 'length(NetworkInterfaces)' \
               --output text)
-            if [ "$attached" = "0" ]; then
-              break
-            fi
+            [ "$attached" = "0" ] && break
             echo "Waiting ($attempt/6) for $attached interface(s) to go away..."
             sleep 5
           done
 
           if [ "$attached" != "0" ]; then
-            echo "::error::Security group $sg_id still has $attached" \
-              "network interface(s) attached after termination. They were not" \
-              "created by an EC2 instance this workflow manages, so nothing" \
-              "was deleted."
+            echo "::error::Security group $sg_id still has $attached network interface(s) attached. Nothing was deleted."
             exit 1
           fi
 
           echo "Deleting security group $sg_id from the previous run."
-          aws ec2 delete-security-group \
-            --region "$AWS_REGION" \
-            --group-id "$sg_id"
+          aws ec2 delete-security-group --region "$AWS_REGION" --group-id "$sg_id"
 
       - name: Terraform Apply
         working-directory: ${{ env.TF_WORKING_DIR }}
