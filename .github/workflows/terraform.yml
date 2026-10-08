@@ -127,15 +127,30 @@ jobs:
     needs: terraform-init-validate
     runs-on: ubuntu-latest
 
+    env:
+      TERRASCAN_VERSION: "1.19.9"
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # tenable/terrascan-action ships an outdated terrascan binary that
+      # no longer compiles the current policy bundle, so install a pinned
+      # release instead.
+      - name: Install Terrascan
+        run: |
+          repo="tenable/terrascan/releases/download/v${TERRASCAN_VERSION}"
+          pkg="terrascan_${TERRASCAN_VERSION}_Linux_x86_64.tar.gz"
+          curl -sSfL -o "${RUNNER_TEMP}/ts.tgz" \
+            "https://github.com/${repo}/${pkg}"
+          tar -xzf "${RUNNER_TEMP}/ts.tgz" \
+            -C "${RUNNER_TEMP}" terrascan
+          sudo install -m 0755 "${RUNNER_TEMP}/terrascan" \
+            /usr/local/bin/terrascan
+          terrascan init
+
       - name: Terrascan Scan
-        uses: tenable/terrascan-action@v1.5.0
-        with:
-          iac_type: terraform
-          iac_dir: ${{ env.TF_WORKING_DIR }}
+        run: terrascan scan -i terraform -d "${TF_WORKING_DIR}"
 
 
   super-linter:
