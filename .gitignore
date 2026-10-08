@@ -8,6 +8,8 @@ crash.*.log
 # Terraform variables containing sensitive values
 *.tfvars
 *.tfvars.json
+# The non-sensitive example values needed by CI are kept in the repo
+!ec2/terraform.tfvars
 
 # Terraform plan
 *.tfplan

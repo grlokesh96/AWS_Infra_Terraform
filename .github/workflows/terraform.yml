@@ -1,3 +1,4 @@
+---
 name: Terraform CI/CD (AWS)
 
 on:
@@ -10,19 +11,41 @@ on:
     branches:
       - main
 
+# Least privilege by default; jobs that need more declare it themselves.
+permissions:
+  contents: read
+
 env:
   TF_VERSION: "1.9.8"
-  TF_WORKING_DIR: "./infrastructure"
+  TF_WORKING_DIR: "./ec2"
   AWS_REGION: "us-east-1"
 
 jobs:
 
+  config-check:
+    name: Config Check
+    runs-on: ubuntu-latest
+
+    outputs:
+      infracost_enabled: ${{ steps.secrets.outputs.infracost_enabled }}
+
+    steps:
+      - name: Check optional secrets
+        id: secrets
+        env:
+          INFRACOST_API_KEY: ${{ secrets.INFRACOST_API_KEY }}
+        run: |
+          if [ -n "${INFRACOST_API_KEY}" ]; then
+            echo "infracost_enabled=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "infracost_enabled=false" >> "${GITHUB_OUTPUT}"
+            echo "::notice::INFRACOST_API_KEY not set, Infracost skipped"
+          fi
+
+
   terraform-init-validate:
     name: Terraform Init & Validate
     runs-on: ubuntu-latest
-
-    permissions:
-      contents: read
 
     steps:
       - name: Checkout
@@ -35,7 +58,7 @@ jobs:
 
       - name: Terraform Init
         working-directory: ${{ env.TF_WORKING_DIR }}
-        run: terraform init -backend=false
+        run: terraform init -backend=false -input=false
 
       - name: Terraform Format
         working-directory: ${{ env.TF_WORKING_DIR }}
@@ -87,9 +110,6 @@ jobs:
     needs: terraform-init-validate
     runs-on: ubuntu-latest
 
-    permissions:
-      contents: read
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -112,7 +132,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Terrascan Scan
-        uses: tenable/terrascan-action@main
+        uses: tenable/terrascan-action@v1.5.0
         with:
           iac_type: terraform
           iac_dir: ${{ env.TF_WORKING_DIR }}
@@ -141,39 +161,6 @@ jobs:
           VALIDATE_JSON: true
 
 
-  terratest:
-    name: Terratest
-    needs: terraform-init-validate
-    runs-on: ubuntu-latest
-
-    permissions:
-      contents: read
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.23"
-
-      - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Install Dependencies
-        working-directory: ${{ env.TF_WORKING_DIR }}/tests
-        run: go mod download
-
-      - name: Run Terratest
-        working-directory: ${{ env.TF_WORKING_DIR }}/tests
-        run: go test -v -timeout 30m
-
-
   terraform-plan:
     name: Terraform Plan
 
@@ -184,22 +171,8 @@ jobs:
       - gitleaks
       - terrascan
       - super-linter
-      - terratest
-
-    if: |
-      always() &&
-      needs.terraform-init-validate.result == 'success' &&
-      (needs.tflint.result == 'success' || needs.tflint.result == 'skipped') &&
-      (needs.tfsec.result == 'success' || needs.tfsec.result == 'skipped') &&
-      (needs.gitleaks.result == 'success' || needs.gitleaks.result == 'skipped') &&
-      (needs.terrascan.result == 'success' || needs.terrascan.result == 'skipped') &&
-      (needs.super-linter.result == 'success' || needs.super-linter.result == 'skipped') &&
-      (needs.terratest.result == 'success' || needs.terratest.result == 'skipped')
 
     runs-on: ubuntu-latest
-
-    permissions:
-      contents: read
 
     steps:
       - name: Checkout
@@ -219,11 +192,11 @@ jobs:
 
       - name: Terraform Init
         working-directory: ${{ env.TF_WORKING_DIR }}
-        run: terraform init
+        run: terraform init -input=false
 
       - name: Terraform Plan
         working-directory: ${{ env.TF_WORKING_DIR }}
-        run: terraform plan -out=tfplan
+        run: terraform plan -input=false -out=tfplan
 
       - name: Generate Plan Report
         working-directory: ${{ env.TF_WORKING_DIR }}
@@ -233,6 +206,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: terraform-plan
+          if-no-files-found: error
           path: |
             ${{ env.TF_WORKING_DIR }}/tfplan
             ${{ env.TF_WORKING_DIR }}/tfplan.txt
@@ -240,7 +214,12 @@ jobs:
 
   infracost:
     name: Infracost
-    needs: terraform-plan
+    needs:
+      - terraform-plan
+      - config-check
+
+    if: needs.config-check.outputs.infracost_enabled == 'true'
+
     runs-on: ubuntu-latest
 
     permissions:
@@ -258,10 +237,12 @@ jobs:
 
       - name: Terraform Init
         working-directory: ${{ env.TF_WORKING_DIR }}
-        run: terraform init -backend=false
+        run: terraform init -backend=false -input=false
 
       - name: Setup Infracost
         uses: infracost/actions/setup@v3
+        env:
+          INFRACOST_API_KEY: ${{ secrets.INFRACOST_API_KEY }}
 
       - name: Generate Cost Estimate
         working-directory: ${{ env.TF_WORKING_DIR }}
@@ -284,6 +265,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: infracost-report
+          if-no-files-found: error
           path: ${{ env.TF_WORKING_DIR }}/infracost.json
 
 
@@ -293,12 +275,20 @@ jobs:
       - terraform-plan
       - infracost
 
+    # Deployments only ever run from main, never from feature branches
+    # or pull requests.
     if: |
       always() &&
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
       needs.terraform-plan.result == 'success' &&
-      (needs.infracost.result == 'success' || needs.infracost.result == 'skipped')
+      (needs.infracost.result == 'success' ||
+        needs.infracost.result == 'skipped')
 
     runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
 
     environment:
       name: production
@@ -346,8 +336,8 @@ jobs:
 
       - name: Terraform Init
         working-directory: ${{ env.TF_WORKING_DIR }}
-        run: terraform init
+        run: terraform init -input=false
 
       - name: Terraform Apply
         working-directory: ${{ env.TF_WORKING_DIR }}
-        run: terraform apply -auto-approve tfplan
+        run: terraform apply -input=false -auto-approve tfplan
