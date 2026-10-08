@@ -93,7 +93,7 @@ The Terraform root module used by the pipeline is `./ec2`.
 | `terraform-plan` | Real `terraform plan`, uploaded as the `terraform-plan` artifact |
 | `infracost` | Cost estimate (only when `INFRACOST_API_KEY` is configured) |
 | `terraform-approval` | Manual gate via the `production` environment |
-| `terraform-apply` | Applies the exact plan produced by `terraform-plan` |
+| `terraform-apply` | Destroys the previous deployment, then applies the exact plan from `terraform-plan` |
 
 Deployments are restricted to pushes on `main`: pull requests and feature
 branches run every check and produce a plan, but never reach approval/apply.
@@ -123,12 +123,18 @@ Add required reviewers to that environment in
 
 ## Known limitations
 
-State is **local** (no remote backend), which means each pipeline run starts
-from an empty state file:
+State is **local** (no remote backend), so every run plans a full "create"
+against an empty state file. The apply job therefore starts by tearing down
+whatever the previous run left behind: it terminates the instances attached to
+the `terraform-ec2-sg` security group, waits for them, and deletes the group.
 
-- the plan/apply pair is internally consistent within a single run, but
-- a second run will try to create resources that already exist and will fail at
-  `terraform apply`.
+That keeps pushes to `main` self-healing instead of failing on
+`InvalidGroup.Duplicate`, with two consequences to be aware of:
+
+- every deploy replaces the instance, so the public IP changes and the box is
+  briefly down; changes made by hand on the running instance are lost;
+- there is no state locking, so two overlapping runs would fight over the same
+  resources.
 
 For anything beyond a demo, configure an S3 backend with state locking:
 

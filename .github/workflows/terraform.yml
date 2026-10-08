@@ -358,12 +358,11 @@ jobs:
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform init -input=false
 
-      # Terraform state is local to the runner, so a run that failed after
-      # creating the security group would make every later apply fail with
-      # InvalidGroup.Duplicate. Delete that leftover only while nothing is
-      # attached to it; if something is attached, a previous deployment is
-      # still alive and creating a second one would duplicate it.
-      - name: Clean up after a previous partial apply
+      # State is local to the runner, so every run plans a full "create"
+      # against an empty state file. Whatever the previous run left behind
+      # has to go first: otherwise apply fails on InvalidGroup.Duplicate,
+      # and a second EC2 box would be launched on top of the first one.
+      - name: Tear down the previous deployment
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: |
           # Keep this name in sync with aws_security_group.ec2_sg in main.tf.
@@ -374,25 +373,54 @@ jobs:
             --output text)
 
           if [ -z "$sg_id" ] || [ "$sg_id" = "None" ]; then
-            echo "No leftover security group found."
+            echo "No previous deployment found."
             exit 0
           fi
 
-          attachments=$(aws ec2 describe-network-interfaces \
+          # Everything attached to that security group belongs to the
+          # deployment this workflow manages.
+          instance_ids=$(aws ec2 describe-instances \
             --region "$AWS_REGION" \
-            --filters "Name=group-id,Values=$sg_id" \
-            --query 'length(NetworkInterfaces)' \
+            --filters "Name=instance.group-name,Values=terraform-ec2-sg" \
+            "Name=instance-state-name,Values=pending,running,stopping,stopped" \
+            --query 'Reservations[].Instances[].InstanceId' \
             --output text)
 
-          if [ "$attachments" != "0" ]; then
-            echo "::error::Security group $sg_id has $attachments network" \
-              "interface(s) attached: a deployment from an earlier run is" \
-              "still alive. State is not persisted, so import or destroy it" \
-              "before pushing again."
+          if [ -n "$instance_ids" ] && [ "$instance_ids" != "None" ]; then
+            read -r -a ids <<< "$instance_ids"
+            echo "Terminating previous instance(s): ${ids[*]}"
+            aws ec2 terminate-instances \
+              --region "$AWS_REGION" \
+              --instance-ids "${ids[@]}"
+            aws ec2 wait instance-terminated \
+              --region "$AWS_REGION" \
+              --instance-ids "${ids[@]}"
+          fi
+
+          # The security group can only be deleted once its interfaces
+          # have been released.
+          for attempt in 1 2 3 4 5 6; do
+            attached=$(aws ec2 describe-network-interfaces \
+              --region "$AWS_REGION" \
+              --filters "Name=group-id,Values=$sg_id" \
+              --query 'length(NetworkInterfaces)' \
+              --output text)
+            if [ "$attached" = "0" ]; then
+              break
+            fi
+            echo "Waiting ($attempt/6) for $attached interface(s) to go away..."
+            sleep 5
+          done
+
+          if [ "$attached" != "0" ]; then
+            echo "::error::Security group $sg_id still has $attached" \
+              "network interface(s) attached after termination. They were not" \
+              "created by an EC2 instance this workflow manages, so nothing" \
+              "was deleted."
             exit 1
           fi
 
-          echo "Deleting unattached security group $sg_id left by a failed run."
+          echo "Deleting security group $sg_id from the previous run."
           aws ec2 delete-security-group \
             --region "$AWS_REGION" \
             --group-id "$sg_id"
