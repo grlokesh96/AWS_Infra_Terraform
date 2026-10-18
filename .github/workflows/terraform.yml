@@ -20,7 +20,7 @@ concurrency:
 
 env:
   TF_VERSION: "1.9.8"
-  # Terraform directories are configured in each job matrix below.
+  TF_WORKING_DIR: "./ec2"
   AWS_REGION: "us-east-1"
   TERRASCAN_VERSION: "1.19.9"
 
@@ -45,10 +45,6 @@ jobs:
           fi
 
   terraform-init-validate:
-    strategy:
-      fail-fast: false
-      matrix:
-        directory: [ec2, s3]
     name: Terraform Init & Validate
     runs-on: ubuntu-latest
     steps:
@@ -61,22 +57,18 @@ jobs:
           terraform_version: ${{ env.TF_VERSION }}
 
       - name: Terraform Init
-        working-directory: ${{ matrix.directory }}
+        working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform init -backend=false -input=false
 
       - name: Terraform Format
-        working-directory: ${{ matrix.directory }}
+        working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform fmt -check -recursive
 
       - name: Terraform Validate
-        working-directory: ${{ matrix.directory }}
+        working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform validate
 
   tflint:
-    strategy:
-      fail-fast: false
-      matrix:
-        directory: [ec2, s3]
     name: TFLint
     needs: terraform-init-validate
     runs-on: ubuntu-latest
@@ -88,18 +80,14 @@ jobs:
         uses: terraform-linters/setup-tflint@v4
 
       - name: TFLint Init
-        working-directory: ${{ matrix.directory }}
+        working-directory: ${{ env.TF_WORKING_DIR }}
         run: tflint --init
 
       - name: TFLint Scan
-        working-directory: ${{ matrix.directory }}
+        working-directory: ${{ env.TF_WORKING_DIR }}
         run: tflint --recursive
 
   tfsec:
-    strategy:
-      fail-fast: false
-      matrix:
-        directory: [ec2, s3]
     name: tfsec
     needs: terraform-init-validate
     runs-on: ubuntu-latest
@@ -110,7 +98,7 @@ jobs:
       - name: tfsec Scan
         uses: aquasecurity/tfsec-action@v1.0.3
         with:
-          working_directory: ${{ matrix.directory }}
+          working_directory: ${{ env.TF_WORKING_DIR }}
 
   gitleaks:
     name: Gitleaks
@@ -128,10 +116,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   terrascan:
-    strategy:
-      fail-fast: false
-      matrix:
-        directory: [ec2, s3]
     name: Terrascan
     needs: terraform-init-validate
     runs-on: ubuntu-latest
@@ -151,7 +135,7 @@ jobs:
           terrascan init
 
       - name: Terrascan Scan
-        run: terrascan scan -i terraform -d "${{ matrix.directory }}"
+        run: terrascan scan -i terraform -d "${TF_WORKING_DIR}"
 
   super-linter:
     name: Super Linter
@@ -174,11 +158,7 @@ jobs:
           VALIDATE_JSON: true
 
   terraform-plan:
-    strategy:
-      fail-fast: false
-      matrix:
-        directory: [ec2, s3]
-    name: Terraform Plan - ${{ matrix.directory }}
+    name: Terraform Plan
     needs:
       - terraform-init-validate
       - tflint
@@ -187,9 +167,6 @@ jobs:
       - terrascan
       - super-linter
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -199,24 +176,23 @@ jobs:
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
-      # Configure repository variable AWS_ROLE_ARN with the IAM role ARN.
-      - name: Configure AWS Credentials using OIDC
+      - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
-          role-session-name: GitHubActionsTerraform
 
       - name: Terraform Init
-        working-directory: ${{ matrix.directory }}
+        working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform init -input=false
 
       - name: Terraform Plan
-        working-directory: ${{ matrix.directory }}
+        working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform plan -input=false -out=tfplan
 
       - name: Export Plan Report and JSON
-        working-directory: ${{ matrix.directory }}
+        working-directory: ${{ env.TF_WORKING_DIR }}
         run: |
           terraform show -no-color tfplan > tfplan.txt
           terraform show -json tfplan > tfplan.json
@@ -224,18 +200,14 @@ jobs:
       - name: Upload Terraform Plan
         uses: actions/upload-artifact@v4
         with:
-          name: terraform-plan-${{ matrix.directory }}
+          name: terraform-plan
           if-no-files-found: error
           path: |
-            ${{ matrix.directory }}/tfplan
-            ${{ matrix.directory }}/tfplan.txt
-            ${{ matrix.directory }}/tfplan.json
+            ${{ env.TF_WORKING_DIR }}/tfplan
+            ${{ env.TF_WORKING_DIR }}/tfplan.txt
+            ${{ env.TF_WORKING_DIR }}/tfplan.json
 
   infracost:
-    strategy:
-      fail-fast: false
-      matrix:
-        directory: [ec2, s3]
     name: Infracost
     needs:
       - terraform-plan
@@ -255,7 +227,7 @@ jobs:
           terraform_version: ${{ env.TF_VERSION }}
 
       - name: Terraform Init
-        working-directory: ${{ matrix.directory }}
+        working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform init -backend=false -input=false
 
       - name: Setup Infracost
@@ -264,30 +236,26 @@ jobs:
           INFRACOST_API_KEY: ${{ secrets.INFRACOST_API_KEY }}
 
       - name: Generate Cost Estimate
-        working-directory: ${{ matrix.directory }}
+        working-directory: ${{ env.TF_WORKING_DIR }}
         env:
           INFRACOST_API_KEY: ${{ secrets.INFRACOST_API_KEY }}
         run: |
           infracost breakdown --path . --format json --out-file infracost.json
 
       - name: Display Cost
-        working-directory: ${{ matrix.directory }}
+        working-directory: ${{ env.TF_WORKING_DIR }}
         run: infracost output --path infracost.json --format table
 
       - name: Upload Infracost Report
         uses: actions/upload-artifact@v4
         with:
-          name: infracost-report-${{ matrix.directory }}
+          name: infracost-report
           if-no-files-found: error
-          path: ${{ matrix.directory }}/infracost.json
+          path: ${{ env.TF_WORKING_DIR }}/infracost.json
 
   # Open-source cost estimate from the plan artifact. Needs no API key,
   # so it runs on every trigger and comments on the PR when there is one.
   openinfraquote:
-    strategy:
-      fail-fast: false
-      matrix:
-        directory: [ec2, s3]
     name: OpenInfraQuote
     needs: terraform-plan
     runs-on: ubuntu-latest
@@ -301,13 +269,13 @@ jobs:
       - name: Download Terraform Plan
         uses: actions/download-artifact@v4
         with:
-          name: terraform-plan-${{ matrix.directory }}
-          path: ${{ matrix.directory }}
+          name: terraform-plan
+          path: ${{ env.TF_WORKING_DIR }}
 
       - name: OpenInfraQuote
         uses: terrateamio/openinfraquote-action@v1
         with:
-          plan-path: ${{ matrix.directory }}/tfplan.json
+          plan-path: ${{ env.TF_WORKING_DIR }}/tfplan.json
           comment-on-pr: true
           region: ${{ env.AWS_REGION }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -336,11 +304,7 @@ jobs:
         run: echo "Production approval granted."
 
   terraform-apply:
-    strategy:
-      fail-fast: false
-      matrix:
-        directory: [ec2, s3]
-    name: Terraform Apply - ${{ matrix.directory }}
+    name: Terraform Apply
     needs: terraform-approval
     # always() stops GitHub from skipping this job when an optional
     # upstream job (e.g. Infracost) was skipped.
@@ -348,7 +312,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write
     environment:
       name: production
     steps:
@@ -360,22 +323,21 @@ jobs:
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
-      # Configure repository variable AWS_ROLE_ARN with the IAM role ARN.
-      - name: Configure AWS Credentials using OIDC
+      - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
-          role-session-name: GitHubActionsTerraform
 
       - name: Download Terraform Plan
         uses: actions/download-artifact@v4
         with:
-          name: terraform-plan-${{ matrix.directory }}
-          path: ${{ matrix.directory }}
+          name: terraform-plan
+          path: ${{ env.TF_WORKING_DIR }}
 
       - name: Terraform Init
-        working-directory: ${{ matrix.directory }}
+        working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform init -input=false
 
       # State is local to the runner, so each run plans a full "create".
@@ -383,7 +345,6 @@ jobs:
       # InvalidGroup.Duplicate and a second instance launches alongside the first.
       # Keep this name in sync with aws_security_group.ec2_sg in main.tf.
       - name: Tear down the previous deployment
-        if: matrix.directory == 'ec2'
         env:
           SG_NAME: terraform-ec2-sg
         run: |
@@ -434,5 +395,5 @@ jobs:
           aws ec2 delete-security-group --region "$AWS_REGION" --group-id "$sg_id"
 
       - name: Terraform Apply
-        working-directory: ${{ matrix.directory }}
+        working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform apply -input=false -auto-approve tfplan
