@@ -20,7 +20,7 @@ concurrency:
 
 env:
   TF_VERSION: "1.9.8"
-  TF_WORKING_DIR: "./ec2"
+  TF_WORKING_DIR: ["./ec2", "./s3"]
   AWS_REGION: "us-east-1"
   TERRASCAN_VERSION: "1.19.9"
 
